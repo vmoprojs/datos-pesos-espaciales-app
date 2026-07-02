@@ -1141,13 +1141,48 @@ SECTIONS = {
     "12. Actividad guiada": activity_section,
 }
 
+SECTION_GROUPS = {
+    "Datos espaciales": [
+        "1. Introducción",
+        "2. Tipos de datos",
+        "3. Geometrías",
+        "4. CRS",
+        "5. Estructuras Python",
+    ],
+    "Pesos espaciales y vecindades": [
+        "6. Pesos espaciales",
+        "7. Tipos de pesos",
+        "8. Comparador W",
+        "9. Rezago espacial",
+    ],
+    "Autocorrelación espacial": [
+        "10. Autocorrelación global",
+        "11. Autocorrelación local",
+        "12. Actividad guiada",
+    ],
+}
+
 
 with st.sidebar:
-    st.header("Clase de 2 horas")
-    section = st.radio("Sección", list(SECTIONS.keys()), label_visibility="collapsed")
+    st.header("Contenidos")
+    if "active_section" not in st.session_state:
+        st.session_state["active_section"] = next(iter(SECTIONS))
+
+    for group_name, group_sections in SECTION_GROUPS.items():
+        st.markdown(f"**{group_name}**")
+        for index, section_name in enumerate(group_sections, start=1):
+            is_active = st.session_state["active_section"] == section_name
+            if st.button(
+                section_name,
+                key=f"nav_{group_name}_{index}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["active_section"] = section_name
+
+    section = st.session_state["active_section"]
     st.divider()
-    st.caption("Materia: Estructura Social y Espacial de los Datos y su Arquitectura")
-    st.caption("Especialización: IA y Analítica de Datos para las Ciencias Sociales")
+    st.caption("Materia: GeoAnalítica de Datos")
     st.divider()
     with st.expander("Datos sintéticos"):
         st.write(f"Territorios: {len(polygons)}")
