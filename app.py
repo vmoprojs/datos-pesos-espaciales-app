@@ -23,6 +23,16 @@ from utils.clustering import (
     territory_cluster_table,
     ward_labels,
 )
+from utils.spatial_regression import (
+    MODEL_DESCRIPTIONS,
+    breusch_pagan_test,
+    coefficient_table,
+    fit_spatial_regression,
+    model_comparison_table,
+    predict_spatial_shock,
+    prepare_regression_data,
+    spatial_diagnostic_signals,
+)
 from utils.data_generation import (
     GEOGRAPHIC_CRS,
     HAS_GEO,
@@ -1341,6 +1351,422 @@ def clustering_regionalization_section() -> None:
     discussion("¿Cuándo aceptarías perder un poco de ajuste estadístico para ganar una región conectada y comunicable?")
 
 
+def spatial_regression_section() -> None:
+    section_title(
+        "Regresión espacial",
+        "Cuando la relación entre variables también viaja por la vecindad.",
+    )
+    st.markdown(
+        """
+        En datos territoriales, una regresión lineal puede fallar si ignora dependencia espacial, spillovers o
+        heterogeneidad territorial. Esta sección usa modelos didácticos para mostrar cuándo MCO es insuficiente
+        y cómo cambian la interpretación, los residuos y las predicciones al incorporar `W`.
+        """
+    )
+    st.caption("Tema basado en: https://vmoprojs.github.io/SpatialEconPython/spatialregression/")
+
+    left, right = st.columns([0.82, 1.38])
+    with left:
+        y_name = st.selectbox(
+            "Variable dependiente y",
+            SOCIAL_VARIABLES,
+            index=3,
+            key="spatial_reg_y",
+        )
+        x_options = [variable for variable in SOCIAL_VARIABLES if variable != y_name]
+        default_x = [variable for variable in ["ingreso_medio", "acceso_servicios", "tasa_pobreza"] if variable in x_options][:2]
+        if len(default_x) < 2:
+            default_x = x_options[:2]
+        x_names = st.multiselect(
+            "Variables explicativas X",
+            x_options,
+            default=default_x,
+            key="spatial_reg_x",
+        )
+        if not x_names:
+            st.warning("Selecciona al menos una covariable. Se usará la primera disponible para mantener activo el modelo.")
+            x_names = x_options[:1]
+        if len(x_names) > 3:
+            st.warning("Para mantener grados de libertad en estos datos sintéticos, se usarán las primeras tres covariables.")
+            x_names = x_names[:3]
+
+        model_name = st.selectbox(
+            "Modelo a interpretar",
+            list(MODEL_DESCRIPTIONS.keys()),
+            key="spatial_reg_model",
+        )
+        standardize_model = st.checkbox(
+            "Estandarizar y y X",
+            value=True,
+            key="spatial_reg_standardize",
+            help="Hace comparables los coeficientes. Las predicciones quedan en desviaciones estándar de y.",
+        )
+        weights_result = weight_controls("spatial_reg", polygons, default_method="Queen")
+        permutations = st.slider(
+            "Permutaciones para Moran de residuos",
+            min_value=99,
+            max_value=999,
+            value=499,
+            step=100,
+            key="spatial_reg_permutations",
+        )
+        selected = st.selectbox(
+            "Territorio para impactos",
+            polygons["id"] + " · " + polygons["nombre"],
+            key="spatial_reg_selected",
+        )
+        selected_id = selected.split(" · ")[0]
+
+    model_names = list(MODEL_DESCRIPTIONS.keys())
+    fitted_models = [
+        fit_spatial_regression(polygons, y_name, x_names, weights_result.W, name, standardize=standardize_model)
+        for name in model_names
+    ]
+    selected_model = next(result for result in fitted_models if result.model_name == model_name)
+    model_data, scaling_table = prepare_regression_data(polygons, y_name, x_names, standardize_model)
+    selected_idx = int(polygons.index[polygons["id"] == selected_id][0])
+
+    residual_moran = permutation_test(
+        selected_model.residuals,
+        weights_result.W,
+        "Moran's I",
+        permutations=permutations,
+        standardize=True,
+        seed=2040,
+    )
+    bp_result = breusch_pagan_test(selected_model)
+    comparison = model_comparison_table(fitted_models)
+    coeffs = coefficient_table(selected_model)
+
+    residual_data = polygons.copy()
+    residual_data["observado_modelo"] = selected_model.y_values
+    residual_data["ajustado"] = selected_model.fitted
+    residual_data["residuo"] = selected_model.residuals
+    residual_data["abs_residuo"] = np.abs(selected_model.residuals)
+
+    with right:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("R²", compact_number(selected_model.r2))
+        m2.metric("AIC", compact_number(selected_model.aic))
+        m3.metric("Moran residuos", compact_number(residual_moran.observed, 3))
+        m4.metric("p Moran", compact_number(residual_moran.p_sim, 3))
+        st.info(MODEL_DESCRIPTIONS[model_name])
+        cards = st.columns(3)
+        cards[0].markdown(
+            "<div class='concept-card'><b>Dependencia espacial</b><br><span class='small-note'>Los residuos o la propia y se parecen entre vecinos.</span></div>",
+            unsafe_allow_html=True,
+        )
+        cards[1].markdown(
+            "<div class='concept-card'><b>Spillovers</b><br><span class='small-note'>Cambios en un territorio pueden afectar a sus vecinos.</span></div>",
+            unsafe_allow_html=True,
+        )
+        cards[2].markdown(
+            "<div class='concept-card'><b>Heterogeneidad</b><br><span class='small-note'>La varianza o los parámetros no son estables en el espacio.</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Modelo", "Diagnóstico", "Tipología", "Impactos", "Actividad guiada"]
+    )
+
+    with tab1:
+        equation_by_model = {
+            "MCO / OLS": r"y = X\beta + \varepsilon",
+            "SLX (X y WX)": r"y = X\beta + WX\theta + \varepsilon",
+            "SLM / SAR didáctico (Wy)": r"y = \rho Wy + X\beta + \varepsilon",
+            "SDM didáctico (Wy + WX)": r"y = \rho Wy + X\beta + WX\theta + \varepsilon",
+        }
+        st.latex(equation_by_model[model_name])
+        col_a, col_b = st.columns([0.95, 1.05])
+        with col_a:
+            fit_fig = go.Figure()
+            fit_fig.add_trace(
+                go.Scatter(
+                    x=residual_data["observado_modelo"],
+                    y=residual_data["ajustado"],
+                    mode="markers+text",
+                    text=residual_data["id"],
+                    textposition="top center",
+                    marker=dict(size=14, color="#457b9d", line=dict(color="white", width=1.5)),
+                    hovertemplate="<b>%{text}</b><br>observado=%{x:.2f}<br>ajustado=%{y:.2f}<extra></extra>",
+                    showlegend=False,
+                )
+            )
+            axis_min = float(min(residual_data["observado_modelo"].min(), residual_data["ajustado"].min()))
+            axis_max = float(max(residual_data["observado_modelo"].max(), residual_data["ajustado"].max()))
+            fit_fig.add_shape(
+                type="line",
+                x0=axis_min,
+                y0=axis_min,
+                x1=axis_max,
+                y1=axis_max,
+                line=dict(color="#e76f51", dash="dash"),
+            )
+            fit_fig.update_layout(
+                title="Observado frente a ajustado",
+                height=420,
+                margin=dict(l=10, r=10, t=55, b=10),
+                xaxis_title=f"{y_name} observado",
+                yaxis_title=f"{y_name} ajustado",
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+            )
+            st.plotly_chart(fit_fig, use_container_width=True)
+        with col_b:
+            coef_plot = coeffs.loc[coeffs["término"] != "constante"].copy()
+            coef_plot["significativo"] = np.where(coef_plot["p_valor"] < 0.05, "p < 0.05", "p >= 0.05")
+            coef_fig = go.Figure()
+            colors = ["#2a9d8f" if value < 0.05 else "#9ca3af" for value in coef_plot["p_valor"]]
+            coef_fig.add_trace(
+                go.Bar(
+                    x=coef_plot["término"],
+                    y=coef_plot["coeficiente"],
+                    marker=dict(color=colors),
+                    customdata=coef_plot[["p_valor", "error_estándar"]],
+                    hovertemplate="%{x}<br>coef=%{y:.3f}<br>p=%{customdata[0]:.3f}<br>se=%{customdata[1]:.3f}<extra></extra>",
+                )
+            )
+            coef_fig.add_hline(y=0, line_dash="dot", line_color="#6b7280")
+            coef_fig.update_layout(
+                title="Coeficientes del modelo",
+                height=420,
+                margin=dict(l=10, r=10, t=55, b=10),
+                xaxis_title="Término",
+                yaxis_title="Coeficiente",
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                showlegend=False,
+            )
+            st.plotly_chart(coef_fig, use_container_width=True)
+        st.markdown("**Tabla de coeficientes**")
+        st.dataframe(coeffs.round(4), width="stretch", hide_index=True)
+        st.markdown("**Comparación de especificaciones**")
+        st.dataframe(comparison.round(4), width="stretch", hide_index=True)
+
+    with tab2:
+        st.markdown(
+            """
+            El diagnóstico parte de una pregunta simple: después de explicar `y`, ¿los residuos todavía tienen patrón
+            espacial? Si Moran de residuos es alto y significativo, el modelo lineal dejó estructura territorial sin explicar.
+            """
+        )
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Moran I residuos", compact_number(residual_moran.observed, 3))
+        d2.metric("p simulado", compact_number(residual_moran.p_sim, 3))
+        d3.metric("Breusch-Pagan LM", compact_number(bp_result["LM"], 2))
+        d4.metric("p BP", compact_number(bp_result["p_valor"], 3))
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.plotly_chart(
+                fig_polygons(residual_data, color_column="residuo", selected_id=selected_id, title="Mapa de residuos"),
+                use_container_width=True,
+            )
+        with col_b:
+            residual_scatter = moran_scatter_data(residual_data, "residuo", weights_result.W, standardize=True)
+            st.plotly_chart(
+                fig_moran_scatter(
+                    residual_scatter,
+                    residual_moran.observed,
+                    "residuo",
+                    title="Diagrama de Moran para residuos",
+                ),
+                use_container_width=True,
+            )
+        signals = spatial_diagnostic_signals(selected_model, weights_result.W)
+        st.dataframe(signals.round(3), width="stretch", hide_index=True)
+        if residual_moran.p_sim < 0.05:
+            st.warning(
+                "Los residuos muestran autocorrelación espacial. Revisa SLM/SDM si la dependencia parece sustantiva "
+                "o SEM/variables omitidas si el patrón queda en el error."
+            )
+        else:
+            st.success("Con esta especificación, los residuos no muestran evidencia fuerte de autocorrelación espacial.")
+        st.info(
+            "En una aplicación formal se usarían pruebas LM robustas, razón de verosimilitud o Wald. "
+            "Aquí se muestran señales didácticas para entender la lógica de selección del modelo."
+        )
+
+    with tab3:
+        taxonomy = pd.DataFrame(
+            [
+                {
+                    "modelo": "MCO / OLS",
+                    "ecuación": "y = Xβ + ε",
+                    "qué espacializa": "Nada",
+                    "cuándo discutirlo": "Base de comparación; útil si residuos no tienen patrón espacial.",
+                },
+                {
+                    "modelo": "SLX",
+                    "ecuación": "y = Xβ + WXθ + ε",
+                    "qué espacializa": "Covariables de vecinos",
+                    "cuándo discutirlo": "Spillovers de variables explicativas sin feedback de y.",
+                },
+                {
+                    "modelo": "SLM / SAR",
+                    "ecuación": "y = ρWy + Xβ + ε",
+                    "qué espacializa": "Variable dependiente",
+                    "cuándo discutirlo": "Interdependencia sustantiva entre territorios.",
+                },
+                {
+                    "modelo": "SDM",
+                    "ecuación": "y = ρWy + Xβ + WXθ + ε",
+                    "qué espacializa": "y y X",
+                    "cuándo discutirlo": "Dependencia de resultados y spillovers de covariables.",
+                },
+                {
+                    "modelo": "SEM",
+                    "ecuación": "y = Xβ + u; u = λWu + ε",
+                    "qué espacializa": "Error",
+                    "cuándo discutirlo": "Variables omitidas o shocks no observados con patrón espacial.",
+                },
+            ]
+        )
+        st.dataframe(taxonomy, width="stretch", hide_index=True)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(
+                """
+                **Lectura de parámetros**
+
+                - `β`: relación propia entre `X` e `y`.
+                - `θ`: efecto de covariables vecinas `WX`.
+                - `ρ`: dependencia de `y` respecto a `Wy`.
+                - `λ`: dependencia espacial en el error.
+                """
+            )
+            st.latex(r"(I - \rho W)y = X\beta + WX\theta + \varepsilon")
+        with col_b:
+            st.code(
+                """# En una aplicación formal con PySAL/spreg:
+from spreg import ML_Lag, ML_Error
+
+modelo_slm = ML_Lag(y, X, w=w_queen)
+modelo_sem = ML_Error(y, X, w=w_queen)
+
+# Luego: revisar rho/lambda, pseudo R², AIC,
+# heterocedasticidad y Moran de residuos.""",
+                language="python",
+            )
+
+    with tab4:
+        shock_variable = st.selectbox(
+            "Variable que recibe el cambio",
+            x_names,
+            key="spatial_reg_shock_variable",
+        )
+        if standardize_model:
+            shock = st.slider(
+                "Cambio aplicado al territorio foco (desviaciones estándar)",
+                min_value=-2.0,
+                max_value=2.0,
+                value=1.0,
+                step=0.1,
+                key="spatial_reg_shock_std",
+            )
+            unit_label = "desv. est. de y"
+        else:
+            raw_std = float(polygons[shock_variable].std(ddof=0))
+            shock = st.slider(
+                f"Cambio aplicado a {shock_variable}",
+                min_value=-2.0 * raw_std,
+                max_value=2.0 * raw_std,
+                value=raw_std,
+                step=max(raw_std / 20, 0.1),
+                key="spatial_reg_shock_raw",
+            )
+            unit_label = f"unidades de {y_name}"
+        impacts = predict_spatial_shock(model_data, selected_model, shock_variable, selected_idx, shock)
+        impact_map = polygons.copy()
+        impact_map["cambio_predicho"] = impacts["cambio_predicho"].values
+        direct_effect = float(impacts.loc[selected_idx, "cambio_predicho"])
+        indirect_effect = float(impacts.loc[impacts.index != selected_idx, "cambio_predicho"].sum())
+        total_effect = float(impacts["cambio_predicho"].sum())
+        i1, i2, i3 = st.columns(3)
+        i1.metric("Impacto directo", f"{direct_effect:.3f}")
+        i2.metric("Impacto indirecto total", f"{indirect_effect:.3f}")
+        i3.metric("Impacto total", f"{total_effect:.3f}")
+        col_a, col_b = st.columns([1.05, 0.95])
+        with col_a:
+            st.plotly_chart(
+                fig_polygons(
+                    impact_map,
+                    color_column="cambio_predicho",
+                    selected_id=selected_id,
+                    title=f"Cambio predicho en {y_name}",
+                    colorscale="RdBu",
+                ),
+                use_container_width=True,
+            )
+        with col_b:
+            impact_fig = go.Figure(
+                go.Bar(
+                    x=impacts["id"],
+                    y=impacts["cambio_predicho"],
+                    marker=dict(color=np.where(impacts["tipo_impacto"] == "directo", "#e76f51", "#457b9d")),
+                    customdata=impacts[["nombre", "tipo_impacto"]],
+                    hovertemplate="<b>%{customdata[0]}</b><br>%{x}<br>cambio=%{y:.3f}<br>%{customdata[1]}<extra></extra>",
+                )
+            )
+            impact_fig.add_hline(y=0, line_dash="dot", line_color="#6b7280")
+            impact_fig.update_layout(
+                title=f"Respuesta territorial ({unit_label})",
+                height=420,
+                margin=dict(l=10, r=10, t=55, b=10),
+                xaxis_title="Territorio",
+                yaxis_title="Cambio predicho",
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                showlegend=False,
+            )
+            st.plotly_chart(impact_fig, use_container_width=True)
+        st.dataframe(impacts.round(4), width="stretch", hide_index=True)
+        st.markdown(
+            "En modelos con `Wy`, un cambio puede circular por el multiplicador espacial. "
+            "En modelos con `WX`, parte del efecto aparece en vecinos por las covariables rezagadas."
+        )
+
+    with tab5:
+        st.markdown(
+            """
+            **Actividad: selecciona y defiende un modelo espacial**
+
+            1. Plantea una hipótesis sustantiva para `y`.
+            2. Justifica las covariables y la matriz `W`.
+            3. Estima MCO y revisa residuos: ¿queda patrón espacial?
+            4. Compara MCO, SLX, SLM y SDM con AIC/BIC, `R²` y diagnóstico.
+            5. Decide si el problema parece de spillovers, rezago de `y`, error espacial o heterogeneidad.
+            6. Interpreta un impacto directo e indirecto para el territorio foco.
+            """
+        )
+        response = st.text_area(
+            "Respuesta del grupo",
+            height=240,
+            placeholder="Ejemplo: La vulnerabilidad parece depender de ingreso, servicios y de la situación de territorios vecinos...",
+            key="spatial_reg_activity_response",
+        )
+        summary = (
+            f"Variable dependiente: {y_name}\n"
+            f"Covariables: {', '.join(x_names)}\n"
+            f"Matriz W: {weights_result.method} ({weights_result.parameter_label})\n"
+            f"Modelo interpretado: {selected_model.model_name}\n"
+            f"Estandarizado: {'sí' if standardize_model else 'no'}\n"
+            f"R2: {selected_model.r2:.4f}\n"
+            f"AIC: {selected_model.aic:.4f}\n"
+            f"Moran residuos: {residual_moran.observed:.4f} | p_sim: {residual_moran.p_sim:.4f}\n"
+            f"Breusch-Pagan LM: {bp_result['LM']:.4f} | p: {bp_result['p_valor']:.4f}\n"
+            f"Territorio foco: {selected}\n\n"
+            f"Respuesta:\n{response}"
+        )
+        st.download_button(
+            "Descargar actividad",
+            data=summary.encode("utf-8"),
+            file_name="actividad_regresion_espacial.txt",
+            mime="text/plain",
+        )
+
+    discussion("¿El patrón espacial está en la variable dependiente, en las covariables vecinas o en lo que el modelo dejó sin explicar?")
+
+
 def activity_section() -> None:
     section_title(
         "Actividad guiada para estudiantes",
@@ -1536,6 +1962,7 @@ SECTIONS = {
     "11. Autocorrelación local": local_autocorrelation_section,
     "12. Actividad guiada": activity_section,
     "13. Clustering y regionalización": clustering_regionalization_section,
+    "14. Regresión espacial": spatial_regression_section,
 }
 
 SECTION_GROUPS = {
@@ -1559,6 +1986,9 @@ SECTION_GROUPS = {
     ],
     "Clustering y regionalización": [
         "13. Clustering y regionalización",
+    ],
+    "Modelos espaciales": [
+        "14. Regresión espacial",
     ],
 }
 

@@ -18,6 +18,7 @@ Permitir que estudiantes de ciencias sociales exploren, visualicen y manipulen:
 - autocorrelación espacial global con Moran's I, Geary's C y pruebas por permutación;
 - autocorrelación espacial local con LISA, clústeres Alto-Alto/Bajo-Bajo y atípicos espaciales.
 - clustering geodemográfico y regionalización con restricciones de conectividad espacial.
+- regresión espacial didáctica con MCO/OLS, SLX, SLM/SAR, SDM, diagnóstico de residuos e impactos espaciales.
 
 ## Instalación
 
@@ -51,6 +52,7 @@ utils/
   data_generation.py
   explanations.py
   clustering.py
+  spatial_regression.py
   plots.py
   weights.py
 ```
@@ -70,6 +72,7 @@ utils/
 11. Autocorrelación espacial local.
 12. Actividad guiada para estudiantes.
 13. Clustering y regionalización.
+14. Regresión espacial.
 
 ## Guía sugerida para una clase extendida o taller
 
@@ -87,6 +90,8 @@ utils/
 | 118-135 min | Actividad final: comparar `W`, rezago, autocorrelación global y LISA local |
 | 135-155 min | Clustering geodemográfico y regionalización con conectividad |
 | 155-165 min | Actividad guiada de clustering y regionalización |
+| 165-195 min | Regresión espacial: MCO, SLX, SLM/SAR, SDM y diagnóstico de residuos |
+| 195-205 min | Actividad guiada de selección e interpretación de modelos espaciales |
 
 ## Actividades sugeridas
 
@@ -102,6 +107,8 @@ utils/
 - Resolver la actividad guiada integrando una misma matriz `W` con rezago espacial, Moran's I, Geary's C y LISA local.
 - Comparar K-means, Ward jerárquico y una regionalización tipo Ward con restricción espacial.
 - Evaluar el intercambio entre ajuste estadístico y coherencia geográfica de las regiones.
+- Estimar un modelo MCO/OLS y evaluar si sus residuos conservan autocorrelación espacial.
+- Comparar modelos SLX, SLM/SAR y SDM para discutir spillovers, rezago espacial e impactos directos/indirectos.
 - Defender una matriz de pesos para una pregunta sustantiva concreta.
 
 ## Notas sobre dependencias
@@ -113,7 +120,7 @@ utils/
 - instala primero `shapely`, `pyproj` y `pyogrio`, y luego `geopandas`;
 - como alternativa docente, la app incluye una representación interna mínima para geometrías cuando `shapely/geopandas` no están disponibles.
 
-La lógica de matrices de pesos, autocorrelación, clustering y regionalización está implementada con `numpy`, sin depender de `libpysal` ni `scikit-learn`, para que el ejemplo sea transparente para estudiantes.
+La lógica de matrices de pesos, autocorrelación, clustering, regionalización y regresión espacial didáctica está implementada con `numpy`/`scipy`, sin depender de `libpysal`, `spreg` ni `scikit-learn`, para que el ejemplo sea transparente para estudiantes.
 
 ## Recomendaciones docentes
 
@@ -121,4 +128,4 @@ La lógica de matrices de pesos, autocorrelación, clustering y regionalización
 - Pide al grupo que nombre qué relación territorial representa cada criterio.
 - Usa el comparador para mostrar que no existe una matriz "neutral".
 - Enfatiza que `W` es una decisión teórica y metodológica, no solo técnica.
-- Cierra con el rezago espacial, la autocorrelación global, LISA local, clustering y regionalización para conectar la clase con Moran, Geary, modelos espaciales e IA territorial.
+- Cierra con el rezago espacial, la autocorrelación global, LISA local, clustering, regionalización y regresión espacial para conectar la clase con Moran, Geary, modelos espaciales e IA territorial.
