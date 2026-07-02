@@ -38,6 +38,15 @@ MORAN_QUADRANT_COLORS = {
     "No significativo": "#d1d5db",
 }
 
+CLUSTER_COLORS = {
+    1: "#2a9d8f",
+    2: "#e76f51",
+    3: "#457b9d",
+    4: "#f4a261",
+    5: "#6d597a",
+    6: "#8ab17d",
+}
+
 
 def _layout(fig: go.Figure, title: str = "", height: int = 480) -> go.Figure:
     fig.update_layout(
@@ -658,5 +667,138 @@ def fig_local_stat_histogram(
         plot_bgcolor="white",
         paper_bgcolor="white",
         showlegend=False,
+    )
+    return fig
+
+
+def fig_cluster_map(
+    data: pd.DataFrame,
+    labels: np.ndarray,
+    selected_id: str | None = None,
+    variables: list[str] | None = None,
+    title: str = "Mapa de clústeres",
+) -> go.Figure:
+    fig = go.Figure()
+    labels = np.asarray(labels, dtype=int)
+    variables = variables or []
+    for idx, row in data.reset_index(drop=True).iterrows():
+        x, y = polygon_xy(row["geometry"])
+        cluster = int(labels[idx])
+        cluster_name = f"C{cluster}"
+        line_width = 3 if row["id"] == selected_id else 1.2
+        values_text = "".join(f"<br>{variable}: {row[variable]:,.2f}" for variable in variables if variable in row.index)
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                fill="toself",
+                mode="lines",
+                line=dict(color="#263238", width=line_width),
+                fillcolor=CLUSTER_COLORS.get(cluster, PALETTE[(cluster - 1) % len(PALETTE)]),
+                opacity=0.82 if row["id"] != selected_id else 0.96,
+                hovertemplate=f"{row['id']} · {row['nombre']}<br>{cluster_name}{values_text}<extra></extra>",
+                showlegend=False,
+            )
+        )
+    text = [f"{row_id}<br>C{cluster}" for row_id, cluster in zip(data["id"], labels)]
+    fig.add_trace(
+        go.Scatter(
+            x=data["centroide_x"],
+            y=data["centroide_y"],
+            mode="text",
+            text=text,
+            textfont=dict(size=11, color="#111827"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    for cluster in sorted(np.unique(labels)):
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=CLUSTER_COLORS.get(int(cluster), PALETTE[(int(cluster) - 1) % len(PALETTE)])),
+                name=f"C{int(cluster)}",
+                hoverinfo="skip",
+            )
+        )
+    return _layout(fig, title=title)
+
+
+def fig_cluster_profile(
+    profile: pd.DataFrame,
+    variables: list[str],
+    title: str = "Perfil medio por clúster",
+) -> go.Figure:
+    fig = go.Figure()
+    for idx, variable in enumerate(variables):
+        fig.add_trace(
+            go.Bar(
+                x=profile["clúster"],
+                y=profile[variable],
+                name=variable,
+                marker=dict(color=PALETTE[idx % len(PALETTE)]),
+                hovertemplate=f"%{{x}}<br>{variable}: %{{y:.2f}}<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0, line_dash="dot", line_color="#6b7280")
+    fig.update_layout(
+        title=title,
+        height=390,
+        margin=dict(l=10, r=10, t=55, b=10),
+        xaxis_title="Clúster",
+        yaxis_title="Media escalada",
+        barmode="group",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.26, xanchor="left", x=0),
+    )
+    return fig
+
+
+def fig_cluster_scatter(
+    data: pd.DataFrame,
+    labels: np.ndarray,
+    x_column: str,
+    y_column: str,
+    title: str = "Espacio de atributos",
+) -> go.Figure:
+    fig = go.Figure()
+    labels = np.asarray(labels, dtype=int)
+    temp = data.copy()
+    temp["clúster"] = labels
+    for cluster, group in temp.groupby("clúster", sort=True):
+        fig.add_trace(
+            go.Scatter(
+                x=group[x_column],
+                y=group[y_column],
+                mode="markers+text",
+                name=f"C{int(cluster)}",
+                text=group["id"],
+                textposition="top center",
+                marker=dict(
+                    size=14,
+                    color=CLUSTER_COLORS.get(int(cluster), PALETTE[(int(cluster) - 1) % len(PALETTE)]),
+                    line=dict(color="white", width=1.5),
+                ),
+                customdata=group[["nombre"]],
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    f"{x_column}: %{{x:.2f}}<br>"
+                    f"{y_column}: %{{y:.2f}}<br>"
+                    f"C{int(cluster)}<extra></extra>"
+                ),
+            )
+        )
+    fig.update_layout(
+        title=title,
+        height=430,
+        margin=dict(l=10, r=10, t=55, b=10),
+        xaxis_title=x_column.replace("_", " "),
+        yaxis_title=y_column.replace("_", " "),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.24, xanchor="left", x=0),
     )
     return fig

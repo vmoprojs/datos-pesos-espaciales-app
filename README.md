@@ -1,6 +1,6 @@
 # App didáctica: Datos espaciales y pesos espaciales
 
-Aplicación interactiva en Streamlit para apoyar una clase de 2 horas sobre datos espaciales, estructuras de datos geográficos y matrices de pesos espaciales en ciencias sociales.
+Aplicación interactiva en Streamlit para apoyar una clase o taller sobre datos espaciales, estructuras de datos geográficos, matrices de pesos espaciales, autocorrelación y regionalización en ciencias sociales.
 
 La app está completamente en español, usa datos sintéticos inspirados en Quito/Ecuador y no requiere archivos externos ni conexión a internet para funcionar.
 
@@ -17,6 +17,7 @@ Permitir que estudiantes de ciencias sociales exploren, visualicen y manipulen:
 - rezago espacial `Wy` e interpretación territorial;
 - autocorrelación espacial global con Moran's I, Geary's C y pruebas por permutación;
 - autocorrelación espacial local con LISA, clústeres Alto-Alto/Bajo-Bajo y atípicos espaciales.
+- clustering geodemográfico y regionalización con restricciones de conectividad espacial.
 
 ## Instalación
 
@@ -49,6 +50,7 @@ utils/
   autocorrelation.py
   data_generation.py
   explanations.py
+  clustering.py
   plots.py
   weights.py
 ```
@@ -67,8 +69,9 @@ utils/
 10. Autocorrelación espacial global.
 11. Autocorrelación espacial local.
 12. Actividad guiada para estudiantes.
+13. Clustering y regionalización.
 
-## Guía sugerida para una clase de 2 horas
+## Guía sugerida para una clase extendida o taller
 
 | Tiempo | Actividad |
 |---|---|
@@ -81,7 +84,9 @@ utils/
 | 95-105 min | Rezago espacial e interpretación social |
 | 105-113 min | Moran's I, Geary's C y permutaciones |
 | 113-118 min | LISA local: clústeres y atípicos territoriales |
-| 118-120 min | Actividad final: comparar `W`, rezago, autocorrelación global y LISA local |
+| 118-135 min | Actividad final: comparar `W`, rezago, autocorrelación global y LISA local |
+| 135-155 min | Clustering geodemográfico y regionalización con conectividad |
+| 155-165 min | Actividad guiada de clustering y regionalización |
 
 ## Actividades sugeridas
 
@@ -95,6 +100,8 @@ utils/
 - Usar el mapa LISA para identificar dónde están los clústeres significativos y posibles atípicos espaciales.
 - Alternar el mapa LISA entre modo pedagógico, que colorea todos los cuadrantes, y modo estricto, que muestra solo clústeres significativos.
 - Resolver la actividad guiada integrando una misma matriz `W` con rezago espacial, Moran's I, Geary's C y LISA local.
+- Comparar K-means, Ward jerárquico y una regionalización tipo Ward con restricción espacial.
+- Evaluar el intercambio entre ajuste estadístico y coherencia geográfica de las regiones.
 - Defender una matriz de pesos para una pregunta sustantiva concreta.
 
 ## Notas sobre dependencias
@@ -106,7 +113,7 @@ utils/
 - instala primero `shapely`, `pyproj` y `pyogrio`, y luego `geopandas`;
 - como alternativa docente, la app incluye una representación interna mínima para geometrías cuando `shapely/geopandas` no están disponibles.
 
-La lógica de matrices de pesos está implementada con `numpy`, sin depender de `libpysal`, para que el ejemplo sea transparente para estudiantes.
+La lógica de matrices de pesos, autocorrelación, clustering y regionalización está implementada con `numpy`, sin depender de `libpysal` ni `scikit-learn`, para que el ejemplo sea transparente para estudiantes.
 
 ## Recomendaciones docentes
 
@@ -114,4 +121,4 @@ La lógica de matrices de pesos está implementada con `numpy`, sin depender de 
 - Pide al grupo que nombre qué relación territorial representa cada criterio.
 - Usa el comparador para mostrar que no existe una matriz "neutral".
 - Enfatiza que `W` es una decisión teórica y metodológica, no solo técnica.
-- Cierra con el rezago espacial, la autocorrelación global y LISA local para conectar la clase con Moran, Geary, modelos espaciales e IA territorial.
+- Cierra con el rezago espacial, la autocorrelación global, LISA local, clustering y regionalización para conectar la clase con Moran, Geary, modelos espaciales e IA territorial.

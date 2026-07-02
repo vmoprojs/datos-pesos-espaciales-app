@@ -13,6 +13,16 @@ from utils.autocorrelation import (
     moran_scatter_data,
     permutation_test,
 )
+from utils.clustering import (
+    ClusterSolution,
+    cluster_profile_table,
+    count_components_by_label,
+    kmeans_labels,
+    scale_features,
+    solution_metrics,
+    territory_cluster_table,
+    ward_labels,
+)
 from utils.data_generation import (
     GEOGRAPHIC_CRS,
     HAS_GEO,
@@ -37,6 +47,9 @@ from utils.explanations import (
     structures_table,
 )
 from utils.plots import (
+    fig_cluster_map,
+    fig_cluster_profile,
+    fig_cluster_scatter,
     fig_geometry,
     fig_lag_comparison,
     fig_lisa_cluster_map,
@@ -236,6 +249,12 @@ def method_stat_row(name: str, W: np.ndarray, labels: list[str]) -> dict:
         "aisladas": stats["n_aisladas"],
         "simétrica": "sí" if stats["simétrica"] else "no",
     }
+
+
+def compact_number(value: float, digits: int = 2) -> str:
+    if not np.isfinite(value):
+        return "n/d"
+    return f"{value:.{digits}f}"
 
 
 def intro_section() -> None:
@@ -945,6 +964,383 @@ def local_autocorrelation_section() -> None:
     discussion("¿Qué cambia en la interpretación territorial cuando pasamos de un Moran global a un mapa LISA local?")
 
 
+def clustering_regionalization_section() -> None:
+    section_title(
+        "Clustering y regionalización",
+        "Del parecido multivariado a regiones territorialmente coherentes.",
+    )
+    st.markdown(
+        """
+        El clustering agrupa territorios con perfiles sociales similares. La regionalización agrega una condición
+        territorial: los miembros de una misma región deberían estar conectados por una relación espacial, como
+        contigüidad `Queen`, `Rook` o una red `kNN`.
+        """
+    )
+    st.caption("Tema basado en: https://vmoprojs.github.io/SpatialEconPython/clusteringregionalization/")
+
+    left, right = st.columns([0.82, 1.38])
+    with left:
+        variables = st.multiselect(
+            "Variables del perfil multivariado",
+            SOCIAL_VARIABLES,
+            default=["ingreso_medio", "tasa_pobreza", "acceso_servicios", "índice_vulnerabilidad"],
+            key="cluster_variables",
+        )
+        if len(variables) < 2:
+            st.warning("Selecciona al menos dos variables. Se usará un par base para mantener activos los gráficos.")
+            variables = SOCIAL_VARIABLES[:2]
+
+        scale_method = st.selectbox(
+            "Estandarización",
+            ["robusta (mediana/IQR)", "z-score", "min-max 0-1", "sin escalar"],
+            key="cluster_scale_method",
+            help="Las distancias multivariadas son sensibles a la escala de cada variable.",
+        )
+        k = st.slider(
+            "Número de clústeres o regiones",
+            min_value=2,
+            max_value=min(6, len(polygons)),
+            value=4,
+            step=1,
+            key="cluster_k",
+        )
+        algorithm = st.selectbox(
+            "Solución principal",
+            ["K-means", "Ward jerárquico", "Regionalización Ward + conectividad"],
+            key="cluster_algorithm",
+        )
+        seed = st.slider("Semilla K-means", 1, 9999, 2026, 1, key="cluster_seed")
+        connectivity_method = st.selectbox(
+            "Conectividad para regionalización",
+            ["Queen", "Rook", "k vecinos más cercanos"],
+            key="cluster_connectivity_method",
+        )
+        regional_k = 3
+        if connectivity_method == "k vecinos más cercanos":
+            regional_k = st.slider(
+                "k de conectividad regional",
+                min_value=1,
+                max_value=max(1, len(polygons) - 1),
+                value=3,
+                step=1,
+                key="cluster_regional_k",
+            )
+        selected = st.selectbox("Territorio para inspeccionar", polygons["id"] + " · " + polygons["nombre"], key="cluster_selected")
+        selected_id = selected.split(" · ")[0]
+
+    X, scaling_table = scale_features(polygons, variables, scale_method)
+    regional_weights = build_weights_by_method(
+        connectivity_method,
+        polygons,
+        k=regional_k,
+        symmetric_knn=True,
+    )
+    solutions = {
+        "K-means": ClusterSolution(
+            "K-means",
+            kmeans_labels(X, k, seed=seed),
+            "Agrupa por cercanía al centroide del clúster, sin exigir continuidad territorial.",
+        ),
+        "Ward jerárquico": ClusterSolution(
+            "Ward jerárquico",
+            ward_labels(X, k),
+            "Fusiona grupos minimizando la pérdida de homogeneidad interna, sin restricción espacial.",
+        ),
+        "Regionalización Ward + conectividad": ClusterSolution(
+            "Regionalización Ward + conectividad",
+            ward_labels(X, k, connectivity=regional_weights.W),
+            "Fusiona solo grupos conectados por la matriz espacial elegida.",
+        ),
+    }
+    selected_solution = solutions[algorithm]
+    labels = selected_solution.labels
+    selected_idx = int(polygons.index[polygons["id"] == selected_id][0])
+    selected_cluster = int(labels[selected_idx])
+
+    scaled_profile_data = polygons[["id", "nombre"]].copy()
+    scaled_scatter_data = polygons[["id", "nombre"]].copy()
+    for idx, variable in enumerate(variables):
+        scaled_profile_data[variable] = X[:, idx]
+        scaled_scatter_data[variable] = X[:, idx]
+
+    profile_original = cluster_profile_table(polygons, labels, variables)
+    profile_scaled = cluster_profile_table(scaled_profile_data, labels, variables)
+    territory_table = territory_cluster_table(polygons, labels, variables)
+    selected_profile = profile_original.loc[profile_original["clúster"] == f"C{selected_cluster}"].iloc[0]
+
+    metrics_rows = []
+    for solution in solutions.values():
+        row = {"solución": solution.name}
+        row.update(solution_metrics(X, solution.labels, regional_weights.W, polygons))
+        metrics_rows.append(row)
+    metrics_df = pd.DataFrame(metrics_rows)
+    selected_metrics = metrics_df.loc[metrics_df["solución"] == selected_solution.name].iloc[0]
+
+    with right:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Ajuste CH", compact_number(float(selected_metrics["Calinski-Harabasz"])))
+        c2.metric("Silhouette", compact_number(float(selected_metrics["silhouette"])))
+        c3.metric("Fragmentación", int(selected_metrics["fragmentación"]))
+        c4.metric("Vecinos internos", f"{float(selected_metrics['vecinos_internos_%']):.0f}%")
+        st.info(
+            f"{selected_solution.description} El territorio {selected_id} queda en el clúster C{selected_cluster}."
+        )
+        cards = st.columns(3)
+        cards[0].markdown(
+            "<div class='concept-card'><b>Clustering</b><br><span class='small-note'>Busca similitud estadística entre perfiles multivariados.</span></div>",
+            unsafe_allow_html=True,
+        )
+        cards[1].markdown(
+            "<div class='concept-card'><b>Regionalización</b><br><span class='small-note'>Mantiene similitud, pero exige conectividad territorial.</span></div>",
+            unsafe_allow_html=True,
+        )
+        cards[2].markdown(
+            "<div class='concept-card'><b>Trade-off</b><br><span class='small-note'>Más coherencia geográfica puede reducir ajuste estadístico puro.</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Idea central", "Clustering", "Regionalización", "Evaluación", "Actividad guiada"]
+    )
+
+    with tab1:
+        st.markdown(
+            """
+            **Ruta conceptual**
+
+            1. Elegimos variables que describen un perfil social multivariado.
+            2. Estandarizamos para que una variable grande no domine las distancias.
+            3. Agrupamos territorios con perfiles parecidos.
+            4. Revisamos si esos grupos forman manchas conectadas o parches dispersos.
+            5. Si necesitamos regiones operables, imponemos conectividad espacial.
+            """
+        )
+        col_a, col_b = st.columns([0.92, 1.08])
+        with col_a:
+            st.markdown("**Parámetros de escalado**")
+            st.dataframe(scaling_table.round(3), width="stretch", hide_index=True)
+            st.markdown(
+                "Las etiquetas `C1`, `C2`, etc. no son rangos ni prioridades: solo indican pertenencia a grupos."
+            )
+        with col_b:
+            x_axis = st.selectbox("Eje X del espacio multivariado", variables, key="cluster_concept_x")
+            y_options = [variable for variable in variables if variable != x_axis] or variables
+            y_axis = st.selectbox("Eje Y del espacio multivariado", y_options, key="cluster_concept_y")
+            st.plotly_chart(
+                fig_cluster_scatter(
+                    scaled_scatter_data,
+                    labels,
+                    x_axis,
+                    y_axis,
+                    title=f"Territorios en espacio escalado: {x_axis} vs {y_axis}",
+                ),
+                use_container_width=True,
+            )
+
+    with tab2:
+        col_a, col_b = st.columns([1.05, 0.95])
+        with col_a:
+            st.plotly_chart(
+                fig_cluster_map(
+                    polygons,
+                    labels,
+                    selected_id=selected_id,
+                    variables=variables,
+                    title=f"{selected_solution.name}: {k} grupos",
+                ),
+                use_container_width=True,
+            )
+        with col_b:
+            st.plotly_chart(
+                fig_cluster_profile(
+                    profile_scaled,
+                    variables,
+                    title=f"Perfil medio escalado: {selected_solution.name}",
+                ),
+                use_container_width=True,
+            )
+        st.markdown("**Perfil en unidades originales**")
+        st.dataframe(profile_original, width="stretch", hide_index=True)
+        st.markdown("**Asignación territorial**")
+        st.dataframe(territory_table.round(2), width="stretch", hide_index=True)
+
+    with tab3:
+        st.markdown(
+            f"La restricción espacial usa `{regional_weights.method}` ({regional_weights.parameter_label}). "
+            "Un grupo regionalizado solo puede crecer fusionando territorios conectados por esa matriz."
+        )
+        map_a, map_b, map_c = st.columns(3)
+        with map_a:
+            st.plotly_chart(
+                fig_cluster_map(polygons, solutions["K-means"].labels, title="K-means sin restricción"),
+                use_container_width=True,
+            )
+        with map_b:
+            st.plotly_chart(
+                fig_cluster_map(polygons, solutions["Ward jerárquico"].labels, title="Ward sin restricción"),
+                use_container_width=True,
+            )
+        with map_c:
+            st.plotly_chart(
+                fig_cluster_map(
+                    polygons,
+                    solutions["Regionalización Ward + conectividad"].labels,
+                    title="Ward con conectividad",
+                ),
+                use_container_width=True,
+            )
+        col_a, col_b = st.columns([0.95, 1.05])
+        with col_a:
+            component_rows = []
+            for solution in solutions.values():
+                components = count_components_by_label(regional_weights.W, solution.labels)
+                for cluster, component_count in components.items():
+                    component_rows.append(
+                        {
+                            "solución": solution.name,
+                            "clúster": f"C{cluster}",
+                            "n_territorios": int((solution.labels == cluster).sum()),
+                            "componentes": component_count,
+                            "lectura": "conectado" if component_count == 1 else "fragmentado",
+                        }
+                    )
+            st.dataframe(pd.DataFrame(component_rows), width="stretch", hide_index=True)
+        with col_b:
+            st.plotly_chart(
+                plot_spatial_weights_network(
+                    polygons,
+                    regional_weights.W,
+                    selected_id=selected_id,
+                    title=f"Conectividad usada: {regional_weights.method}",
+                ),
+                use_container_width=True,
+            )
+
+    with tab4:
+        st.markdown(
+            """
+            Una solución no se evalúa con un solo número. El ajuste estadístico mira homogeneidad interna y separación
+            entre grupos; la coherencia espacial mira si esos grupos forman regiones compactas y conectadas.
+            """
+        )
+        display_metrics = metrics_df.copy()
+        numeric_cols = [
+            "Calinski-Harabasz",
+            "silhouette",
+            "vecinos_internos_%",
+            "compacidad_bbox",
+        ]
+        display_metrics[numeric_cols] = display_metrics[numeric_cols].round(3)
+        st.dataframe(display_metrics, width="stretch", hide_index=True)
+        fig_fit = go.Figure()
+        fig_fit.add_trace(
+            go.Bar(
+                x=metrics_df["solución"],
+                y=metrics_df["Calinski-Harabasz"],
+                name="Calinski-Harabasz",
+                marker=dict(color="#457b9d"),
+            )
+        )
+        fig_fit.update_layout(
+            title="Ajuste estadístico: mayor suele ser mejor",
+            height=330,
+            margin=dict(l=10, r=10, t=55, b=10),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            showlegend=False,
+        )
+        fig_space = go.Figure()
+        fig_space.add_trace(
+            go.Bar(
+                x=metrics_df["solución"],
+                y=metrics_df["vecinos_internos_%"],
+                name="Vecinos internos",
+                marker=dict(color="#2a9d8f"),
+            )
+        )
+        fig_space.add_trace(
+            go.Bar(
+                x=metrics_df["solución"],
+                y=metrics_df["compacidad_bbox"] * 100,
+                name="Compacidad bbox",
+                marker=dict(color="#f4a261"),
+            )
+        )
+        fig_space.update_layout(
+            title="Coherencia espacial: mayor indica regiones más compactas o conectadas",
+            height=330,
+            margin=dict(l=10, r=10, t=55, b=10),
+            yaxis_title="Porcentaje / índice x100",
+            barmode="group",
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0),
+        )
+        col_a, col_b = st.columns(2)
+        col_a.plotly_chart(fig_fit, use_container_width=True)
+        col_b.plotly_chart(fig_space, use_container_width=True)
+        st.info(
+            "Para planificación territorial suele ser preferible una solución algo menos óptima en distancia, "
+            "pero más clara como región conectada y comunicable."
+        )
+
+    with tab5:
+        st.markdown(
+            """
+            **Actividad: diseña y defiende una regionalización**
+
+            1. Formula una pregunta social donde tenga sentido agrupar territorios.
+            2. Elige variables y explica por qué necesitan estandarización.
+            3. Compara K-means, Ward y regionalización: ¿qué solución comunica mejor el patrón?
+            4. Revisa el clúster del territorio foco y su perfil promedio.
+            5. Decide qué pesa más en tu conclusión: ajuste estadístico o coherencia territorial.
+            """
+        )
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Territorio foco", selected_id)
+        a2.metric("Clúster foco", f"C{selected_cluster}")
+        a3.metric("Tamaño del clúster", int(selected_profile["n_territorios"]))
+        st.markdown("**Perfil del clúster foco**")
+        st.dataframe(pd.DataFrame([selected_profile]), width="stretch", hide_index=True)
+        question = st.text_input(
+            "Pregunta social del grupo",
+            placeholder="Ejemplo: ¿qué territorios comparten un perfil de vulnerabilidad y baja accesibilidad?",
+            key="cluster_activity_question",
+        )
+        interpretation = st.text_area(
+            "Interpretación y decisión metodológica",
+            height=220,
+            placeholder=(
+                "Explica variables, escalado, número de grupos, diferencias entre clustering y regionalización, "
+                "y cómo usarías la solución en una decisión territorial."
+            ),
+            key="cluster_activity_interpretation",
+        )
+        summary = (
+            f"Pregunta social: {question}\n"
+            f"Variables: {', '.join(variables)}\n"
+            f"Estandarización: {scale_method}\n"
+            f"Número de grupos/regiones: {k}\n"
+            f"Solución principal: {selected_solution.name}\n"
+            f"Conectividad regional: {regional_weights.method} ({regional_weights.parameter_label})\n"
+            f"Territorio foco: {selected}\n"
+            f"Clúster foco: C{selected_cluster}\n"
+            f"Calinski-Harabasz: {compact_number(float(selected_metrics['Calinski-Harabasz']), 4)}\n"
+            f"Silhouette: {compact_number(float(selected_metrics['silhouette']), 4)}\n"
+            f"Fragmentación: {int(selected_metrics['fragmentación'])}\n"
+            f"Vecinos internos: {float(selected_metrics['vecinos_internos_%']):.2f}%\n\n"
+            f"Interpretación:\n{interpretation}"
+        )
+        st.download_button(
+            "Descargar actividad",
+            data=summary.encode("utf-8"),
+            file_name="actividad_clustering_regionalizacion.txt",
+            mime="text/plain",
+        )
+
+    discussion("¿Cuándo aceptarías perder un poco de ajuste estadístico para ganar una región conectada y comunicable?")
+
+
 def activity_section() -> None:
     section_title(
         "Actividad guiada para estudiantes",
@@ -1139,6 +1535,7 @@ SECTIONS = {
     "10. Autocorrelación global": global_autocorrelation_section,
     "11. Autocorrelación local": local_autocorrelation_section,
     "12. Actividad guiada": activity_section,
+    "13. Clustering y regionalización": clustering_regionalization_section,
 }
 
 SECTION_GROUPS = {
@@ -1159,6 +1556,9 @@ SECTION_GROUPS = {
         "10. Autocorrelación global",
         "11. Autocorrelación local",
         "12. Actividad guiada",
+    ],
+    "Clustering y regionalización": [
+        "13. Clustering y regionalización",
     ],
 }
 
